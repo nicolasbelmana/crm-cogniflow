@@ -39,6 +39,25 @@ export function createLeadsRepository(pool) {
       return result.rows[0] ?? null;
     },
 
+    /**
+     * Bulk lookup used by classifications.service.js's real batching
+     * (docs/OPTIMIZACION_API_CLAUDE.md, item 4): fetches every lead
+     * belonging to `userId` in a single query instead of N round-trips,
+     * one per lead in the batch.
+     */
+    async findByIdsForUser(ids, userId) {
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return [];
+      }
+
+      const result = await pool.query(
+        `SELECT ${LEAD_COLUMNS} FROM leads WHERE user_id = $1 AND id = ANY($2::uuid[])`,
+        [userId, ids]
+      );
+
+      return result.rows;
+    },
+
     async create(userId, lead) {
       const result = await pool.query(
         `INSERT INTO leads (user_id, name, email, phone, company, chat_history, raw_data, source)

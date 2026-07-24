@@ -121,4 +121,40 @@ export const api = {
 
     return handleResponse(response);
   },
+
+  async classifyLead(leadId, { force } = {}) {
+    const query = force ? '?force=true' : '';
+    const response = await fetch(`${API_URL}/classifications${query}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({ leadId }),
+    });
+
+    return handleResponse(response);
+  },
+
+  async classifyBatch(leadIds, { force } = {}) {
+    const query = force ? '?force=true' : '';
+    const response = await fetch(`${API_URL}/classifications/batch${query}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({ leadIds }),
+    });
+
+    return handleResponse(response);
+  },
+
+  async getClassificationHistory(leadId) {
+    const response = await fetch(`${API_URL}/classifications/${leadId}`, {
+      headers: getAuthHeaders(),
+    });
+
+    return handleResponse(response);
+  },
 };

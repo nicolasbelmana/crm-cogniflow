@@ -13,11 +13,12 @@
  * don't require touching the handler).
  */
 export class AppError extends Error {
-  constructor(message, statusCode = 500, payload = {}) {
+  constructor(message, statusCode = 500, payload = {}, code = null) {
     super(message);
     this.name = this.constructor.name;
     this.statusCode = statusCode;
     this.payload = payload;
+    this.code = code;
     this.isOperational = true;
     Error.captureStackTrace?.(this, this.constructor);
   }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, Pencil, Sparkles, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import LeadForm from '@/components/LeadForm';
+import ClassificationBadge from '@/components/ClassificationBadge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -21,6 +22,12 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
+const TEMPERATURE_LABELS = {
+  cold: 'Frío',
+  warm: 'Tibio',
+  hot: 'Caliente',
+};
+
 export default function Leads() {
   const [leads, setLeads] = useState([]);
   const [companyFilter, setCompanyFilter] = useState('');
@@ -28,6 +35,15 @@ export default function Leads() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editingLead, setEditingLead] = useState(null);
+  const [classifications, setClassifications] = useState({});
+  const [classificationErrors, setClassificationErrors] = useState({});
+  const [classifyingIds, setClassifyingIds] = useState(new Set());
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [reusedBatchIds, setReusedBatchIds] = useState([]);
+  const [historyLead, setHistoryLead] = useState(null);
+  const [historyItems, setHistoryItems] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const loadLeads = useCallback(async (company = search) => {
     setLoading(true);
@@ -36,6 +52,7 @@ export default function Leads() {
     try {
       const data = await api.getLeads(company ? { company } : {});
       setLeads(data.leads);
+      setSelectedIds(new Set());
     } catch (err) {
       setError(err.message);
     } finally {
@@ -46,6 +63,142 @@ export default function Leads() {
   useEffect(() => {
     loadLeads('');
   }, [loadLeads]);
+
+  function markClassifying(id, value) {
+    setClassifyingIds((current) => {
+      const next = new Set(current);
+      if (value) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  async function handleClassify(leadId, { force = false } = {}) {
+    setError('');
+    markClassifying(leadId, true);
+    setClassificationErrors((current) => {
+      const next = { ...current };
+      delete next[leadId];
+      return next;
+    });
+
+    try {
+      const { classification, reused } = await api.classifyLead(leadId, { force });
+      setClassifications((current) => ({ ...current, [leadId]: { ...classification, reused } }));
+
+      if (reused && !force) {
+        const temperatureLabel = TEMPERATURE_LABELS[classification.temperature] ?? classification.temperature;
+        const shouldForce = window.confirm(
+          `Este lead no tiene cambios desde la última clasificación (temperatura: ${temperatureLabel}). ¿Querés forzar una nueva clasificación de todas formas?`
+        );
+        if (shouldForce) {
+          await handleClassify(leadId, { force: true });
+          return;
+        }
+      }
+    } catch (err) {
+      setError(err.message);
+      setClassificationErrors((current) => ({ ...current, [leadId]: err.message }));
+    } finally {
+      markClassifying(leadId, false);
+    }
+  }
+
+  async function classifySelectedIds(leadIds, { force = false } = {}) {
+    if (leadIds.length === 0) {
+      return;
+    }
+
+    setError('');
+    setBatchLoading(true);
+    leadIds.forEach((id) => markClassifying(id, true));
+    setClassificationErrors((current) => {
+      const next = { ...current };
+      leadIds.forEach((id) => delete next[id]);
+      return next;
+    });
+
+    try {
+      const { results, errors } = await api.classifyBatch(leadIds, { force });
+      setClassifications((current) => {
+        const next = { ...current };
+        results.forEach((result) => {
+          next[result.lead_id] = result;
+        });
+        return next;
+      });
+
+      const reusedIds = results.filter((result) => result.reused).map((result) => result.lead_id);
+      setReusedBatchIds(force ? [] : reusedIds);
+
+      if (errors.length > 0) {
+        setClassificationErrors((current) => {
+          const next = { ...current };
+          errors.forEach((item) => {
+            next[item.leadId] = item.error;
+          });
+          return next;
+        });
+        setError(`No se pudieron clasificar ${errors.length} lead(s).`);
+      }
+
+      setSelectedIds(new Set());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      leadIds.forEach((id) => markClassifying(id, false));
+      setBatchLoading(false);
+    }
+  }
+
+  async function handleClassifySelected() {
+    await classifySelectedIds(Array.from(selectedIds));
+  }
+
+  async function handleForceReusedBatch() {
+    const ids = reusedBatchIds;
+    setReusedBatchIds([]);
+    await classifySelectedIds(ids, { force: true });
+  }
+
+  function toggleSelected(id) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((current) =>
+      current.size === leads.length ? new Set() : new Set(leads.map((lead) => lead.id))
+    );
+  }
+
+  async function handleShowHistory(lead) {
+    setHistoryLead(lead);
+    setHistoryLoading(true);
+    setHistoryItems([]);
+
+    try {
+      const { classifications: history } = await api.getClassificationHistory(lead.id);
+      setHistoryItems(history);
+      if (history.length > 0) {
+        setClassifications((current) => ({ ...current, [lead.id]: history[0] }));
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
 
   async function handleDelete(id) {
     if (!window.confirm('¿Eliminar este lead?')) {
@@ -73,7 +226,7 @@ export default function Leads() {
           <div>
             <CardTitle>Listado de leads</CardTitle>
             <CardDescription>
-              {leads.length} lead(s) cargados. La columna de temperatura llegará en la Semana 3.
+              {leads.length} lead(s) cargados. Clasificalos con IA para conocer su temperatura.
             </CardDescription>
           </div>
           <Link to="/leads/load">
@@ -81,7 +234,7 @@ export default function Leads() {
           </Link>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               placeholder="Filtrar por empresa..."
               value={companyFilter}
@@ -101,12 +254,45 @@ export default function Leads() {
             >
               Limpiar
             </Button>
+            <Button
+              className="ml-auto"
+              disabled={selectedIds.size === 0 || batchLoading}
+              onClick={handleClassifySelected}
+            >
+              {batchLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
+              Clasificar seleccionados ({selectedIds.size})
+            </Button>
           </div>
 
           {error ? (
             <p className="text-sm text-destructive" role="alert">
               {error}
             </p>
+          ) : null}
+
+          {reusedBatchIds.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 p-3 text-sm">
+              <span>
+                {reusedBatchIds.length} lead(s) no tenían cambios y no se reclasificaron. ¿Forzar reclasificación de
+                todos modos?
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto"
+                disabled={batchLoading}
+                onClick={handleForceReusedBatch}
+              >
+                Forzar reclasificación
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setReusedBatchIds([])}>
+                Descartar
+              </Button>
+            </div>
           ) : null}
 
           {loading ? (
@@ -126,24 +312,66 @@ export default function Leads() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.size === leads.length}
+                        onChange={toggleSelectAll}
+                        aria-label="Seleccionar todos"
+                      />
+                    </TableHead>
                     <TableHead>Nombre</TableHead>
                     <TableHead>Empresa</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Teléfono</TableHead>
                     <TableHead>Fuente</TableHead>
+                    <TableHead>Temperatura</TableHead>
                     <TableHead className="text-right">Acciones</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {leads.map((lead) => (
                     <TableRow key={lead.id}>
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(lead.id)}
+                          onChange={() => toggleSelected(lead.id)}
+                          aria-label={`Seleccionar ${lead.name}`}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">{lead.name}</TableCell>
                       <TableCell>{lead.company}</TableCell>
                       <TableCell>{lead.email}</TableCell>
                       <TableCell>{lead.phone || '—'}</TableCell>
                       <TableCell>{lead.source}</TableCell>
+                      <TableCell>
+                        <ClassificationBadge
+                          classification={classifications[lead.id]}
+                          loading={classifyingIds.has(lead.id)}
+                          error={classificationErrors[lead.id]}
+                          reused={classifications[lead.id]?.reused}
+                        />
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            title="Clasificar con IA"
+                            disabled={classifyingIds.has(lead.id)}
+                            onClick={() => handleClassify(lead.id)}
+                          >
+                            <Sparkles className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            title="Ver historial"
+                            onClick={() => handleShowHistory(lead)}
+                          >
+                            Historial
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -168,6 +396,57 @@ export default function Leads() {
           )}
         </CardContent>
       </Card>
+
+      {historyLead ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-4">
+            <div>
+              <CardTitle>Historial de clasificaciones</CardTitle>
+              <CardDescription>{historyLead.name}</CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => setHistoryLead(null)}>
+              Cerrar
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {historyLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Cargando historial...
+              </div>
+            ) : historyItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Este lead todavía no fue clasificado.
+              </p>
+            ) : (
+              <div className="rounded-md border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Temperatura</TableHead>
+                      <TableHead>Confianza</TableHead>
+                      <TableHead>Razonamiento</TableHead>
+                      <TableHead>Modelo</TableHead>
+                      <TableHead>Fecha</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {historyItems.map((item) => (
+                      <TableRow key={item.id}>
+                        <TableCell>{TEMPERATURE_LABELS[item.temperature] ?? item.temperature}</TableCell>
+                        <TableCell>{Math.round(item.confidence * 100)}%</TableCell>
+                        <TableCell className="max-w-xs">{item.reasoning}</TableCell>
+                        <TableCell>{item.model_used}</TableCell>
+                        <TableCell>{new Date(item.created_at).toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {editingLead ? (
         <Card>

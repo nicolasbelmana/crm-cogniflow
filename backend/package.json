@@ -7,12 +7,14 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "db:migrate": "node src/shared/database/migrate.js"
+    "db:migrate": "node src/shared/database/migrate.js",
+    "measure:token-impact": "node src/shared/database/measureTokenImpact.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "csv-parse": "^7.0.0",

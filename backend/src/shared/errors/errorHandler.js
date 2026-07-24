@@ -11,7 +11,9 @@ import { AppError } from './AppError.js';
  */
 export function errorHandler(error, req, res, _next) {
   if (error instanceof AppError) {
-    return res.status(error.statusCode).json({ error: error.message, ...error.payload });
+    return res
+      .status(error.statusCode)
+      .json({ error: error.message, ...(error.code ? { code: error.code } : {}), ...error.payload });
   }
 
   // Unexpected/programmer error: log full detail server-side, never leak it.

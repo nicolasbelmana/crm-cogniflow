@@ -18,6 +18,12 @@ import { createLeadsService } from './modules/leads/leads.service.js';
 import { createLeadsController } from './modules/leads/leads.controller.js';
 import { createLeadsRouter } from './modules/leads/leads.routes.js';
 
+import { createAnthropicClassifierClient } from './shared/ai/anthropicClassifierClient.js';
+import { createClassificationsRepository } from './modules/classifications/classifications.repository.js';
+import { createClassificationsService } from './modules/classifications/classifications.service.js';
+import { createClassificationsController } from './modules/classifications/classifications.controller.js';
+import { createClassificationsRouter } from './modules/classifications/classifications.routes.js';
+
 /**
  * Composition root: the ONE place that wires concrete implementations
  * (Postgres pool, bcrypt, jsonwebtoken) into the abstractions that
@@ -49,6 +55,19 @@ export function createApp() {
   const leadsService = createLeadsService({ leadsRepository });
   const leadsController = createLeadsController({ leadsService });
 
+  const aiClassifierClient = createAnthropicClassifierClient({
+    apiKey: config.ai.anthropicApiKey,
+    model: config.ai.anthropicModel,
+  });
+  const classificationsRepository = createClassificationsRepository(pool);
+  const classificationsService = createClassificationsService({
+    leadsRepository,
+    classificationsRepository,
+    aiClassifierClient,
+    model: config.ai.anthropicModel,
+  });
+  const classificationsController = createClassificationsController({ classificationsService });
+
   const app = express();
 
   app.use(
@@ -66,6 +85,7 @@ export function createApp() {
 
   app.use('/auth', createAuthRouter(authController));
   app.use('/leads', createLeadsRouter(leadsController));
+  app.use('/classifications', createClassificationsRouter(classificationsController));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
