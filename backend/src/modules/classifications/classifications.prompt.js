@@ -10,12 +10,12 @@ Sé breve y preciso.`;
  * Cost-optimization strategy from docs/cogniflow_spec_tecnico.md (section
  * 5): compress `chat_history` into a single compact line instead of
  * sending the full conversation. `chat_history` is already capped to the
- * last 5 entries by leads.validator.js; here we take just the last 2 and
+ * last 5 entries by leads.validator.js; here we take just the last 3 and
  * flatten them into one line, truncating each entry to ~80 chars to
  * further reduce `userPrompt` token usage (see docs/OPTIMIZACION_API_CLAUDE.md,
  * opción 3).
  */
-const MAX_HISTORY_ENTRIES = 2;
+const MAX_HISTORY_ENTRIES = 3;
 const MAX_ENTRY_LENGTH = 80;
 
 function summarizeChatHistory(chatHistory) {
@@ -55,6 +55,28 @@ export function buildClassificationPrompt(lead) {
  */
 export function hashClassificationPrompt(userPrompt) {
   return createHash('sha256').update(userPrompt).digest('hex');
+}
+
+function normalizeLeadForCache(lead) {
+  return {
+    id: lead.id,
+    name: lead.name,
+    email: lead.email,
+    phone: lead.phone,
+    company: lead.company,
+    source: lead.source,
+    chat_history: lead.chat_history,
+    raw_data: lead.raw_data,
+  };
+}
+
+/**
+ * Cache key required by docs/optimizacion.md (etapa 4): combines model,
+ * prompt and lead content into a deterministic SHA256 fingerprint.
+ */
+export function buildClassificationCacheKey({ model, systemPrompt, userPrompt, lead }) {
+  const payload = `${model}\n${systemPrompt}\n${userPrompt}\n${JSON.stringify(normalizeLeadForCache(lead))}`;
+  return createHash('sha256').update(payload).digest('hex');
 }
 
 const BATCH_SYSTEM_PROMPT = `${SYSTEM_PROMPT}

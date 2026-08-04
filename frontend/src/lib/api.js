@@ -1,18 +1,41 @@
 const API_URL = import.meta.env.VITE_API_URL || '';
+const AUTH_EXPIRED_EVENT = 'cogniflow:auth-expired';
+const TOKEN_KEY = 'cogniflow_token';
+const USER_KEY = 'cogniflow_user';
 
 function getAuthHeaders() {
-  const token = localStorage.getItem('cogniflow_token');
+  const token = localStorage.getItem(TOKEN_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function handleResponse(response) {
-  const data = await response.json().catch(() => ({}));
+  const raw = await response.text();
+  const data = (() => {
+    try {
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  })();
 
   if (!response.ok) {
+    const backendError = String(data.error || '').toLowerCase();
+    const tokenExpired = response.status === 401 || backendError.includes('jwt expired');
+
+    if (tokenExpired) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+      throw new Error('Tu sesión expiró. Iniciá sesión nuevamente.');
+    }
+
+    const details = Array.isArray(data.details) ? data.details.join(', ') : null;
+    const textFallback = raw && !data.error ? raw.slice(0, 220) : null;
     const message =
       data.error ||
-      data.details?.join(', ') ||
-      'Something went wrong. Please try again.';
+      details ||
+      textFallback ||
+      `HTTP ${response.status} ${response.statusText || 'Request failed'}`;
     throw new Error(message);
   }
 
@@ -20,6 +43,8 @@ async function handleResponse(response) {
 }
 
 export const api = {
+  AUTH_EXPIRED_EVENT,
+
   async register(payload) {
     const response = await fetch(`${API_URL}/auth/register`, {
       method: 'POST',
@@ -122,7 +147,7 @@ export const api = {
     return handleResponse(response);
   },
 
-  async classifyLead(leadId, { force } = {}) {
+  async classifyLead(leadId, { force, provider, signal } = {}) {
     const query = force ? '?force=true' : '';
     const response = await fetch(`${API_URL}/classifications${query}`, {
       method: 'POST',
@@ -130,13 +155,14 @@ export const api = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       },
-      body: JSON.stringify({ leadId }),
+      body: JSON.stringify({ leadId, ...(provider ? { provider } : {}) }),
+      signal,
     });
 
     return handleResponse(response);
   },
 
-  async classifyBatch(leadIds, { force } = {}) {
+  async classifyBatch(leadIds, { force, provider, signal } = {}) {
     const query = force ? '?force=true' : '';
     const response = await fetch(`${API_URL}/classifications/batch${query}`, {
       method: 'POST',
@@ -144,7 +170,8 @@ export const api = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       },
-      body: JSON.stringify({ leadIds }),
+      body: JSON.stringify({ leadIds, ...(provider ? { provider } : {}) }),
+      signal,
     });
 
     return handleResponse(response);
@@ -152,6 +179,20 @@ export const api = {
 
   async getClassificationHistory(leadId) {
     const response = await fetch(`${API_URL}/classifications/${leadId}`, {
+      headers: getAuthHeaders(),
+    });
+
+    return handleResponse(response);
+  },
+
+  async getUsage({ days } = {}) {
+    const searchParams = new URLSearchParams();
+    if (Number.isFinite(days) && days > 0) {
+      searchParams.set('days', String(days));
+    }
+
+    const query = searchParams.toString();
+    const response = await fetch(`${API_URL}/classifications/usage${query ? `?${query}` : ''}`, {
       headers: getAuthHeaders(),
     });
 

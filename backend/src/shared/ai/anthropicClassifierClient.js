@@ -73,16 +73,41 @@ const BATCH_MAX_TOKENS_OVERHEAD = 40;
  * how `createTokenService`/`createLeadsRepository` take their dependencies
  * by parameter rather than importing globals.
  */
-export function createAnthropicClassifierClient({ apiKey, model }) {
+export function createAnthropicClassifierClient({ apiKey, model, enablePromptCache = true }) {
   if (!apiKey) {
     throw new Error('ANTHROPIC_API_KEY is required to create the Anthropic classifier client');
   }
 
   const client = new Anthropic({ apiKey });
+  const isDev = process.env.NODE_ENV !== 'production';
+
+  function withoutCacheControl(tool) {
+    const { cache_control: _cacheControl, ...rest } = tool;
+    return rest;
+  }
+
+  const classifyTool = enablePromptCache
+    ? CLASSIFY_TOOL
+    : withoutCacheControl(CLASSIFY_TOOL);
+
+  const classifyLeadsTool = enablePromptCache
+    ? CLASSIFY_LEADS_TOOL
+    : withoutCacheControl(CLASSIFY_LEADS_TOOL);
+
+  function buildSystemBlocks(systemPrompt) {
+    return [
+      {
+        type: 'text',
+        text: systemPrompt,
+        ...(enablePromptCache ? { cache_control: { type: 'ephemeral' } } : {}),
+      },
+    ];
+  }
 
   return {
     async classify({ systemPrompt, userPrompt }) {
       let response;
+      const startedAt = Date.now();
 
       try {
         response = await client.messages.create({
@@ -98,15 +123,9 @@ export function createAnthropicClassifierClient({ apiKey, model }) {
           // and reuses it at a fraction of the input-token cost for
           // subsequent calls within the ~5 min cache window (important
           // for classifyBatch, which calls this sequentially per lead).
-          system: [
-            {
-              type: 'text',
-              text: systemPrompt,
-              cache_control: { type: 'ephemeral' },
-            },
-          ],
+          system: buildSystemBlocks(systemPrompt),
           messages: [{ role: 'user', content: userPrompt }],
-          tools: [CLASSIFY_TOOL],
+          tools: [classifyTool],
           tool_choice: { type: 'tool', name: 'classify_lead' },
         });
       } catch (error) {
@@ -114,6 +133,15 @@ export function createAnthropicClassifierClient({ apiKey, model }) {
         // server-side (picked up by the central errorHandler) and surface
         // a generic, safe 502 instead.
         console.error('[anthropicClassifierClient] request failed:', error);
+
+        if (error?.status === 401) {
+          throw new AppError('Anthropic authentication failed. Check ANTHROPIC_API_KEY.', 502);
+        }
+
+        if (error?.status === 429) {
+          throw new AppError('Anthropic rate limit exceeded. Retry in a moment.', 429);
+        }
+
         throw new AppError('Classification provider unavailable', 502);
       }
 
@@ -123,10 +151,15 @@ export function createAnthropicClassifierClient({ apiKey, model }) {
       // system/tool blocks were reused (billed ~10% of normal input price);
       // cache_creation_input_tokens > 0 means this call wrote the cache
       // (billed ~25% extra, only on the first call within the window).
-      if (response.usage?.cache_read_input_tokens || response.usage?.cache_creation_input_tokens) {
+      if (
+        isDev &&
+        (response.usage?.cache_read_input_tokens || response.usage?.cache_creation_input_tokens)
+      ) {
         console.debug('[anthropicClassifierClient] cache usage:', {
           cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
           cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
+          model,
+          response_time_ms: Date.now() - startedAt,
         });
       }
 
@@ -148,33 +181,42 @@ export function createAnthropicClassifierClient({ apiKey, model }) {
      */
     async classifyMany({ systemPrompt, userPrompt, batchSize }) {
       let response;
+      const startedAt = Date.now();
 
       try {
         response = await client.messages.create({
           model,
           max_tokens: PER_LEAD_MAX_TOKENS * Math.max(1, batchSize ?? 1) + BATCH_MAX_TOKENS_OVERHEAD,
-          system: [
-            {
-              type: 'text',
-              text: systemPrompt,
-              cache_control: { type: 'ephemeral' },
-            },
-          ],
+          system: buildSystemBlocks(systemPrompt),
           messages: [{ role: 'user', content: userPrompt }],
-          tools: [CLASSIFY_LEADS_TOOL],
+          tools: [classifyLeadsTool],
           tool_choice: { type: 'tool', name: 'classify_leads' },
         });
       } catch (error) {
         console.error('[anthropicClassifierClient] batch request failed:', error);
+
+        if (error?.status === 401) {
+          throw new AppError('Anthropic authentication failed. Check ANTHROPIC_API_KEY.', 502);
+        }
+
+        if (error?.status === 429) {
+          throw new AppError('Anthropic rate limit exceeded. Retry in a moment.', 429);
+        }
+
         throw new AppError('Classification provider unavailable', 502);
       }
 
       const toolUse = response.content.find((block) => block.type === 'tool_use');
 
-      if (response.usage?.cache_read_input_tokens || response.usage?.cache_creation_input_tokens) {
+      if (
+        isDev &&
+        (response.usage?.cache_read_input_tokens || response.usage?.cache_creation_input_tokens)
+      ) {
         console.debug('[anthropicClassifierClient] batch cache usage:', {
           cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
           cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
+          model,
+          response_time_ms: Date.now() - startedAt,
         });
       }
 

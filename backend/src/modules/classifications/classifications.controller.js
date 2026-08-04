@@ -11,6 +11,14 @@ function parseForceFlag(req) {
   return req.query?.force === 'true';
 }
 
+function parseProvider(req) {
+  const providerFromBody = req.body?.provider;
+  const providerFromQuery = req.query?.provider;
+  const candidate = providerFromBody ?? providerFromQuery;
+
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
+}
+
 /**
  * Translates HTTP requests into classificationsService calls and results
  * into responses. No SQL, no AI/provider concerns, no validation rules —
@@ -26,13 +34,21 @@ export function createClassificationsController({ classificationsService }) {
       }
 
       const force = parseForceFlag(req);
-      const { classification, reused } = await classificationsService.classifyOne(req.user.id, leadId, { force });
+      const provider = parseProvider(req);
+      const { classification, reused } = await classificationsService.classifyOne(req.user.id, leadId, {
+        force,
+        provider,
+      });
       res.status(201).json({ classification, reused });
     },
 
     async classifyBatch(req, res) {
       const force = parseForceFlag(req);
-      const result = await classificationsService.classifyBatch(req.user.id, req.body?.leadIds, { force });
+      const provider = parseProvider(req);
+      const result = await classificationsService.classifyBatch(req.user.id, req.body?.leadIds, {
+        force,
+        provider,
+      });
       res.status(201).json(result);
     },
 

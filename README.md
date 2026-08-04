@@ -115,3 +115,19 @@ Ver `docs/sample-leads.csv`. Columnas soportadas: `name`, `email`, `company`, `p
 | `JWT_SECRET` | Secreto para firmar tokens |
 | `JWT_EXPIRES_IN` | Expiración del token (default: 7d) |
 | `FRONTEND_URL` | Origen permitido por CORS |
+| `AI_PROVIDER` | Provider por defecto (`anthropic` o `ollama`) |
+| `ANTHROPIC_API_KEY` | API key de Anthropic para clasificaciones IA |
+| `ANTHROPIC_MODEL` | Modelo Claude a usar (default: `claude-haiku-4-5`) |
+| `OLLAMA_BASE_URL` | URL base de Ollama local (default: `http://localhost:11434`) |
+| `OLLAMA_MODEL` | Modelo local de Ollama (default: `llama3.2:1b`) |
+| `OLLAMA_TIMEOUT_MS` | Timeout de requests a Ollama en ms (default: `30000`) |
+| `ENABLE_CACHE` | Habilita/deshabilita cache de respuestas IA (`true`/`false`) |
+| `CACHE_TTL` | TTL del cache en segundos (default: `86400`) |
+| `MONTHLY_TOKEN_QUOTA` | Cuota mensual simulada de tokens por usuario (default: `10000`) |
+| `ENABLE_PROMPT_CACHE` | Flag para control funcional de prompt cache (`true`/`false`) |
+
+### Fallback automático de proveedor
+
+- Si **no** se envía `provider` explícito en la request y el default es `anthropic`, el backend intenta `ollama` automáticamente cuando Anthropic falla por indisponibilidad/autenticación (`502/503/504`).
+- Si se envía `provider` explícito (`anthropic` u `ollama`), **no** hay fallback: se respeta el proveedor pedido.
+- Errores de rate limit (`429`) de Anthropic no hacen fallback automático.

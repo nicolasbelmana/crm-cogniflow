@@ -18,7 +18,8 @@ import { createLeadsService } from './modules/leads/leads.service.js';
 import { createLeadsController } from './modules/leads/leads.controller.js';
 import { createLeadsRouter } from './modules/leads/leads.routes.js';
 
-import { createAnthropicClassifierClient } from './shared/ai/anthropicClassifierClient.js';
+import { createClassifierProviders, createProviderClassifierGateway } from './shared/ai/providerFactory.js';
+import { createResponseCache } from './shared/cache/responseCache.js';
 import { createClassificationsRepository } from './modules/classifications/classifications.repository.js';
 import { createClassificationsService } from './modules/classifications/classifications.service.js';
 import { createClassificationsController } from './modules/classifications/classifications.controller.js';
@@ -55,16 +56,24 @@ export function createApp() {
   const leadsService = createLeadsService({ leadsRepository });
   const leadsController = createLeadsController({ leadsService });
 
-  const aiClassifierClient = createAnthropicClassifierClient({
-    apiKey: config.ai.anthropicApiKey,
-    model: config.ai.anthropicModel,
+  const providerRegistry = createClassifierProviders(config);
+  const { providers, defaultProvider, availableProviders } = providerRegistry;
+  const defaultProviderConfig = providers.get(defaultProvider);
+  const aiClassifierClient = createProviderClassifierGateway(providerRegistry);
+  const responseCache = createResponseCache({
+    enabled: config.cache.enabled,
+    ttlSeconds: config.cache.ttlSeconds,
   });
   const classificationsRepository = createClassificationsRepository(pool);
   const classificationsService = createClassificationsService({
     leadsRepository,
     classificationsRepository,
     aiClassifierClient,
-    model: config.ai.anthropicModel,
+    model: defaultProviderConfig.model,
+    defaultProvider,
+    availableProviders,
+    responseCache,
+    monthlyTokenQuota: config.usage.monthlyTokenQuota,
   });
   const classificationsController = createClassificationsController({ classificationsService });
 

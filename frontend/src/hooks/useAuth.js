@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, createElement, useContext, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 
 const AuthContext = createContext(null);
@@ -8,17 +8,38 @@ const USER_KEY = 'cogniflow_user';
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
+    const token = localStorage.getItem(TOKEN_KEY);
     const stored = localStorage.getItem(USER_KEY);
-    return stored ? JSON.parse(stored) : null;
+    if (!token || !stored) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
   });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    function handleAuthExpired() {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      setUser(null);
+    }
+
+    window.addEventListener(api.AUTH_EXPIRED_EVENT, handleAuthExpired);
+
     const token = localStorage.getItem(TOKEN_KEY);
 
     if (!token) {
+      localStorage.removeItem(USER_KEY);
+      setUser(null);
       setLoading(false);
-      return;
+      return () => {
+        window.removeEventListener(api.AUTH_EXPIRED_EVENT, handleAuthExpired);
+      };
     }
 
     api
@@ -28,12 +49,15 @@ export function AuthProvider({ children }) {
         localStorage.setItem(USER_KEY, JSON.stringify(currentUser));
       })
       .catch((err) => {
-        // Distinguish network errors vs auth errors in api.handleResponse isn't
-        // implemented yet; for now assume any error is transient and keep session.
-        // We'll refine api.handleResponse later to surface status codes.
+        // If auth is invalid/expired, api.handleResponse already emitted
+        // AUTH_EXPIRED_EVENT and cleaned local storage.
         console.warn('api.me() failed during startup', err);
       })
       .finally(() => setLoading(false));
+
+    return () => {
+      window.removeEventListener(api.AUTH_EXPIRED_EVENT, handleAuthExpired);
+    };
   }, []);
 
   const value = useMemo(
@@ -70,7 +94,7 @@ export function AuthProvider({ children }) {
     [user, loading]
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return createElement(AuthContext.Provider, { value }, children);
 }
 
 export function useAuth() {

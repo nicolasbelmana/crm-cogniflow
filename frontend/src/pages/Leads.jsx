@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, Pencil, Sparkles, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -28,6 +28,53 @@ const TEMPERATURE_LABELS = {
   hot: 'Caliente',
 };
 
+const CLASSIFICATIONS_STORAGE_KEY = 'cogniflow_lead_classifications';
+const SELECTED_PROVIDER_STORAGE_KEY = 'cogniflow_selected_provider';
+
+function readStoredClassifications() {
+  try {
+    const raw = localStorage.getItem(CLASSIFICATIONS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredClassifications(classificationsByLeadId) {
+  try {
+    localStorage.setItem(CLASSIFICATIONS_STORAGE_KEY, JSON.stringify(classificationsByLeadId));
+  } catch {
+    // Ignore quota/private-mode errors; UI state still works in-memory.
+  }
+}
+
+function readStoredProvider() {
+  try {
+    const value = localStorage.getItem(SELECTED_PROVIDER_STORAGE_KEY);
+    return value === 'anthropic' || value === 'ollama' ? value : 'ollama';
+  } catch {
+    return 'ollama';
+  }
+}
+
+function writeStoredProvider(provider) {
+  try {
+    localStorage.setItem(SELECTED_PROVIDER_STORAGE_KEY, provider);
+  } catch {
+    // Ignore storage errors and keep in-memory value.
+  }
+}
+
+const PROVIDER_OPTIONS = [
+  { value: 'anthropic', label: 'Anthropic (Cloud)' },
+  { value: 'ollama', label: 'Ollama (Local)' },
+];
+
 export default function Leads() {
   const [leads, setLeads] = useState([]);
   const [companyFilter, setCompanyFilter] = useState('');
@@ -35,7 +82,7 @@ export default function Leads() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editingLead, setEditingLead] = useState(null);
-  const [classifications, setClassifications] = useState({});
+  const [classifications, setClassifications] = useState(() => readStoredClassifications());
   const [classificationErrors, setClassificationErrors] = useState({});
   const [classifyingIds, setClassifyingIds] = useState(new Set());
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -44,6 +91,9 @@ export default function Leads() {
   const [historyLead, setHistoryLead] = useState(null);
   const [historyItems, setHistoryItems] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState(() => readStoredProvider());
+  const batchAbortControllerRef = useRef(null);
+  const singleAbortControllersRef = useRef(new Map());
 
   const loadLeads = useCallback(async (company = search) => {
     setLoading(true);
@@ -53,6 +103,22 @@ export default function Leads() {
       const data = await api.getLeads(company ? { company } : {});
       setLeads(data.leads);
       setSelectedIds(new Set());
+
+      const stored = readStoredClassifications();
+      const allowedLeadIds = new Set(data.leads.map((lead) => lead.id));
+      setClassifications((current) => {
+        const next = {};
+
+        for (const leadId of allowedLeadIds) {
+          if (current[leadId]) {
+            next[leadId] = current[leadId];
+          } else if (stored[leadId]) {
+            next[leadId] = stored[leadId];
+          }
+        }
+
+        return next;
+      });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -61,8 +127,24 @@ export default function Leads() {
   }, [search]);
 
   useEffect(() => {
+    writeStoredClassifications(classifications);
+  }, [classifications]);
+
+  useEffect(() => {
+    writeStoredProvider(selectedProvider);
+  }, [selectedProvider]);
+
+  useEffect(() => {
     loadLeads('');
   }, [loadLeads]);
+
+  useEffect(() => () => {
+    batchAbortControllerRef.current?.abort();
+    for (const controller of singleAbortControllersRef.current.values()) {
+      controller.abort();
+    }
+    singleAbortControllersRef.current.clear();
+  }, []);
 
   function markClassifying(id, value) {
     setClassifyingIds((current) => {
@@ -86,7 +168,14 @@ export default function Leads() {
     });
 
     try {
-      const { classification, reused } = await api.classifyLead(leadId, { force });
+      const controller = new AbortController();
+      singleAbortControllersRef.current.set(leadId, controller);
+
+      const { classification, reused } = await api.classifyLead(leadId, {
+        force,
+        provider: selectedProvider,
+        signal: controller.signal,
+      });
       setClassifications((current) => ({ ...current, [leadId]: { ...classification, reused } }));
 
       if (reused && !force) {
@@ -100,9 +189,15 @@ export default function Leads() {
         }
       }
     } catch (err) {
-      setError(err.message);
-      setClassificationErrors((current) => ({ ...current, [leadId]: err.message }));
+      if (err?.name === 'AbortError') {
+        setClassificationErrors((current) => ({ ...current, [leadId]: 'Clasificación detenida por usuario.' }));
+        setError('Clasificación detenida por usuario.');
+      } else {
+        setError(err.message);
+        setClassificationErrors((current) => ({ ...current, [leadId]: err.message }));
+      }
     } finally {
+      singleAbortControllersRef.current.delete(leadId);
       markClassifying(leadId, false);
     }
   }
@@ -122,7 +217,14 @@ export default function Leads() {
     });
 
     try {
-      const { results, errors } = await api.classifyBatch(leadIds, { force });
+      const controller = new AbortController();
+      batchAbortControllerRef.current = controller;
+
+      const { results, errors } = await api.classifyBatch(leadIds, {
+        force,
+        provider: selectedProvider,
+        signal: controller.signal,
+      });
       setClassifications((current) => {
         const next = { ...current };
         results.forEach((result) => {
@@ -147,8 +249,13 @@ export default function Leads() {
 
       setSelectedIds(new Set());
     } catch (err) {
-      setError(err.message);
+      if (err?.name === 'AbortError') {
+        setError('Clasificación detenida por usuario.');
+      } else {
+        setError(err.message);
+      }
     } finally {
+      batchAbortControllerRef.current = null;
       leadIds.forEach((id) => markClassifying(id, false));
       setBatchLoading(false);
     }
@@ -162,6 +269,18 @@ export default function Leads() {
     const ids = reusedBatchIds;
     setReusedBatchIds([]);
     await classifySelectedIds(ids, { force: true });
+  }
+
+  function handleStopBatchClassification() {
+    if (!batchLoading && singleAbortControllersRef.current.size === 0) {
+      return;
+    }
+
+    batchAbortControllerRef.current?.abort();
+    for (const controller of singleAbortControllersRef.current.values()) {
+      controller.abort();
+    }
+    singleAbortControllersRef.current.clear();
   }
 
   function toggleSelected(id) {
@@ -208,6 +327,11 @@ export default function Leads() {
     try {
       await api.deleteLead(id);
       setLeads((current) => current.filter((lead) => lead.id !== id));
+      setClassifications((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
     } catch (err) {
       setError(err.message);
     }
@@ -241,6 +365,18 @@ export default function Leads() {
               onChange={(event) => setCompanyFilter(event.target.value)}
               className="max-w-sm"
             />
+            <select
+              value={selectedProvider}
+              onChange={(event) => setSelectedProvider(event.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              aria-label="Proveedor de IA"
+            >
+              {PROVIDER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <Button variant="outline" onClick={() => { setSearch(companyFilter); loadLeads(companyFilter); }}>
               Buscar
             </Button>
@@ -265,6 +401,13 @@ export default function Leads() {
                 <Sparkles className="h-4 w-4" />
               )}
               Clasificar seleccionados ({selectedIds.size})
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!batchLoading && classifyingIds.size === 0}
+              onClick={handleStopBatchClassification}
+            >
+              Parar clasificación
             </Button>
           </div>
 

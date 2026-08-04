@@ -5,12 +5,51 @@
  */
 export function createClassificationsRepository(pool) {
   return {
-    async create({ leadId, userId, temperature, confidence, reasoning, tokensUsed, modelUsed, promptHash = null }) {
+    async create({
+      leadId,
+      userId,
+      temperature,
+      confidence,
+      reasoning,
+      tokensUsed,
+      modelUsed,
+      providerUsed = null,
+      promptHash = null,
+      inputTokens = 0,
+      outputTokens = 0,
+      estimatedCostUsd = 0,
+    }) {
       const result = await pool.query(
-        `INSERT INTO classifications (lead_id, user_id, temperature, confidence, reasoning, tokens_used, model_used, prompt_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, lead_id, user_id, temperature, confidence, reasoning, tokens_used, model_used, prompt_hash, created_at`,
-        [leadId, userId, temperature, confidence, reasoning, tokensUsed, modelUsed, promptHash]
+        `INSERT INTO classifications (
+          lead_id,
+          user_id,
+          temperature,
+          confidence,
+          reasoning,
+          tokens_used,
+          model_used,
+          provider_used,
+          prompt_hash,
+          input_tokens,
+          output_tokens,
+          estimated_cost_usd
+        )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id, lead_id, user_id, temperature, confidence, reasoning, tokens_used, model_used, provider_used, prompt_hash, input_tokens, output_tokens, estimated_cost_usd, created_at`,
+        [
+          leadId,
+          userId,
+          temperature,
+          confidence,
+          reasoning,
+          tokensUsed,
+          modelUsed,
+          providerUsed,
+          promptHash,
+          inputTokens,
+          outputTokens,
+          estimatedCostUsd,
+        ]
       );
 
       return result.rows[0];
@@ -18,7 +57,7 @@ export function createClassificationsRepository(pool) {
 
     async findAllByLeadId(leadId, userId) {
       const result = await pool.query(
-        `SELECT id, lead_id, user_id, temperature, confidence, reasoning, tokens_used, model_used, prompt_hash, created_at
+        `SELECT id, lead_id, user_id, temperature, confidence, reasoning, tokens_used, model_used, provider_used, prompt_hash, input_tokens, output_tokens, estimated_cost_usd, created_at
          FROM classifications
          WHERE lead_id = $1 AND user_id = $2
          ORDER BY created_at DESC`,
@@ -35,7 +74,7 @@ export function createClassificationsRepository(pool) {
      */
     async findLatestByLeadId(leadId, userId) {
       const result = await pool.query(
-        `SELECT id, lead_id, user_id, temperature, confidence, reasoning, tokens_used, model_used, prompt_hash, created_at
+        `SELECT id, lead_id, user_id, temperature, confidence, reasoning, tokens_used, model_used, provider_used, prompt_hash, input_tokens, output_tokens, estimated_cost_usd, created_at
          FROM classifications
          WHERE lead_id = $1 AND user_id = $2
          ORDER BY created_at DESC
@@ -71,11 +110,15 @@ export function createClassificationsRepository(pool) {
     async getUsageByDay(userId, since) {
       const result = await pool.query(
         `SELECT DATE(created_at) AS day,
+                provider_used,
                 COUNT(*)::int AS classifications_count,
-                COALESCE(SUM(tokens_used), 0)::int AS tokens_used
+                COALESCE(SUM(tokens_used), 0)::int AS tokens_used,
+                COALESCE(SUM(input_tokens), 0)::int AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)::int AS output_tokens,
+                COALESCE(SUM(estimated_cost_usd), 0)::numeric AS estimated_cost_usd
          FROM classifications
          WHERE user_id = $1 AND created_at >= $2
-         GROUP BY DATE(created_at)
+         GROUP BY DATE(created_at), provider_used
          ORDER BY day DESC`,
         [userId, since]
       );
@@ -88,6 +131,7 @@ export function createClassificationsRepository(pool) {
         `SELECT lead_id,
                 COUNT(*)::int AS classifications_count,
                 COALESCE(SUM(tokens_used), 0)::int AS tokens_used,
+                COALESCE(SUM(estimated_cost_usd), 0)::numeric AS estimated_cost_usd,
                 MAX(created_at) AS last_classified_at
          FROM classifications
          WHERE user_id = $1 AND created_at >= $2
@@ -101,14 +145,55 @@ export function createClassificationsRepository(pool) {
 
     async getUsageTotals(userId, since) {
       const result = await pool.query(
-        `SELECT COUNT(*)::int AS classifications_count,
-                COALESCE(SUM(tokens_used), 0)::int AS tokens_used
+        `SELECT provider_used,
+                COUNT(*)::int AS classifications_count,
+                COALESCE(SUM(tokens_used), 0)::int AS tokens_used,
+                COALESCE(SUM(input_tokens), 0)::int AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)::int AS output_tokens,
+                COALESCE(SUM(estimated_cost_usd), 0)::numeric AS estimated_cost_usd
          FROM classifications
-         WHERE user_id = $1 AND created_at >= $2`,
+         WHERE user_id = $1 AND created_at >= $2
+         GROUP BY provider_used`,
         [userId, since]
       );
 
-      return result.rows[0] ?? { classifications_count: 0, tokens_used: 0 };
+      return result.rows;
+    },
+
+    async getUsageByDayAndModel(userId, since) {
+      const result = await pool.query(
+        `SELECT DATE(created_at) AS day,
+                model_used,
+                provider_used,
+                COUNT(*)::int AS calls_count,
+                COALESCE(SUM(tokens_used), 0)::int AS tokens_used,
+                COALESCE(SUM(input_tokens), 0)::int AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)::int AS output_tokens,
+                COALESCE(SUM(estimated_cost_usd), 0)::numeric AS estimated_cost_usd
+         FROM classifications
+         WHERE user_id = $1 AND created_at >= $2
+         GROUP BY DATE(created_at), model_used, provider_used
+         ORDER BY day DESC, model_used ASC`,
+        [userId, since]
+      );
+
+      return result.rows;
+    },
+
+    async getCurrentMonthUsageTotals(userId) {
+      const result = await pool.query(
+        `SELECT provider_used,
+                COUNT(*)::int AS classifications_count,
+                COALESCE(SUM(tokens_used), 0)::int AS tokens_used,
+                COALESCE(SUM(estimated_cost_usd), 0)::numeric AS estimated_cost_usd
+         FROM classifications
+         WHERE user_id = $1
+           AND created_at >= DATE_TRUNC('month', NOW())
+         GROUP BY provider_used`,
+        [userId]
+      );
+
+      return result.rows;
     },
   };
 }
