@@ -3,14 +3,23 @@ import assert from 'node:assert/strict';
 import { createProviderClassifierGateway } from '../src/shared/ai/providerFactory.js';
 import { AppError } from '../src/shared/errors/AppError.js';
 
-function createRegistry({ anthropicClient, ollamaClient, defaultProvider = 'anthropic' }) {
+function createRegistry({ anthropicClient, geminiClient, ollamaClient, defaultProvider = 'anthropic' }) {
+  const providers = new Map();
+
+  if (anthropicClient) {
+    providers.set('anthropic', { name: 'anthropic', model: 'claude-haiku-4-5', client: anthropicClient });
+  }
+
+  if (geminiClient) {
+    providers.set('gemini', { name: 'gemini', model: 'gemini-2.5-flash', client: geminiClient });
+  }
+
+  providers.set('ollama', { name: 'ollama', model: 'llama3.2:1b', client: ollamaClient });
+
   return {
-    providers: new Map([
-      ['anthropic', { name: 'anthropic', model: 'claude-haiku-4-5', client: anthropicClient }],
-      ['ollama', { name: 'ollama', model: 'llama3.2:1b', client: ollamaClient }],
-    ]),
+    providers,
     defaultProvider,
-    availableProviders: ['anthropic', 'ollama'],
+    availableProviders: Array.from(providers.keys()),
   };
 }
 
@@ -120,4 +129,38 @@ test('gateway classifyMany falls back to ollama when default anthropic batch fai
   assert.equal(result.providerUsed, 'ollama');
   assert.equal(result.modelUsed, 'llama3.2:1b');
   assert.equal(Array.isArray(result.parsedInput.classifications), true);
+});
+
+test('gateway classify falls back to ollama when default gemini fails with 502 and provider not explicit', async () => {
+  const gateway = createProviderClassifierGateway(
+    createRegistry({
+      defaultProvider: 'gemini',
+      geminiClient: {
+        async classify() {
+          throw new AppError('Gemini authentication failed. Check GEMINI_API_KEY.', 502);
+        },
+      },
+      ollamaClient: {
+        async classify() {
+          return {
+            parsedInput: {
+              temperature: 'hot',
+              confidence: 0.85,
+              reasoning: 'Gemini failed, local fallback succeeded.',
+            },
+            inputTokens: 15,
+            outputTokens: 9,
+          };
+        },
+      },
+    })
+  );
+
+  const result = await gateway.classify({
+    systemPrompt: 'system',
+    userPrompt: 'user',
+  });
+
+  assert.equal(result.providerUsed, 'ollama');
+  assert.equal(result.modelUsed, 'llama3.2:1b');
 });

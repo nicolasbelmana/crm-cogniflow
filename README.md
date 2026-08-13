@@ -115,9 +115,12 @@ Ver `docs/sample-leads.csv`. Columnas soportadas: `name`, `email`, `company`, `p
 | `JWT_SECRET` | Secreto para firmar tokens |
 | `JWT_EXPIRES_IN` | Expiración del token (default: 7d) |
 | `FRONTEND_URL` | Origen permitido por CORS |
-| `AI_PROVIDER` | Provider por defecto (`anthropic` o `ollama`) |
+| `AI_PROVIDER` | Provider por defecto (`anthropic`, `gemini` o `ollama`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic para clasificaciones IA |
 | `ANTHROPIC_MODEL` | Modelo Claude a usar (default: `claude-haiku-4-5`) |
+| `GEMINI_API_KEY` | API key de Google Gemini (AI Studio) |
+| `GEMINI_MODEL` | Modelo Gemini a usar (default: `gemini-2.5-flash`) |
+| `GEMINI_TIMEOUT_MS` | Timeout de requests a Gemini en ms (default: `30000`) |
 | `OLLAMA_BASE_URL` | URL base de Ollama local (default: `http://localhost:11434`) |
 | `OLLAMA_MODEL` | Modelo local de Ollama (default: `llama3.2:1b`) |
 | `OLLAMA_TIMEOUT_MS` | Timeout de requests a Ollama en ms (default: `30000`) |
@@ -128,6 +131,6 @@ Ver `docs/sample-leads.csv`. Columnas soportadas: `name`, `email`, `company`, `p
 
 ### Fallback automático de proveedor
 
-- Si **no** se envía `provider` explícito en la request y el default es `anthropic`, el backend intenta `ollama` automáticamente cuando Anthropic falla por indisponibilidad/autenticación (`502/503/504`).
-- Si se envía `provider` explícito (`anthropic` u `ollama`), **no** hay fallback: se respeta el proveedor pedido.
-- Errores de rate limit (`429`) de Anthropic no hacen fallback automático.
+- Si **no** se envía `provider` explícito en la request y el default es un provider cloud (`anthropic` o `gemini`), el backend intenta `ollama` automáticamente cuando el cloud falla por indisponibilidad/autenticación (`502/503/504`).
+- Si se envía `provider` explícito (`anthropic`, `gemini` u `ollama`), **no** hay fallback: se respeta el proveedor pedido.
+- Errores de rate limit (`429`) de providers cloud no hacen fallback automático.
