@@ -23,7 +23,7 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 // Ventana por defecto del reporte de uso (opción 6).
 const DEFAULT_USAGE_REPORT_DAYS = 30;
-const CLOUD_PROVIDERS = new Set(['anthropic']);
+const CLOUD_PROVIDERS = new Set(['anthropic', 'gemini']);
 
 function normalizeProviderForUsage(providerUsed) {
   const normalized = String(providerUsed ?? '').trim().toLowerCase();
